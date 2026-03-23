@@ -76,6 +76,144 @@ server.tool(
   }
 );
 
+// --- Invoice state ---
+let invoiceIdCounter = 0;
+
+interface InvoiceRecord {
+  id: string;
+  clientName: string;
+  clientEmail?: string;
+  notes?: string;
+  discount: number;
+  entries: TimeEntry[];
+  subtotal: number;
+  discountAmount: number;
+  total: number;
+  createdAt: string;
+  confirmed: boolean;
+}
+
+const invoices: InvoiceRecord[] = [];
+
+// --- Invoice tools ---
+
+server.tool(
+  {
+    name: "generate-invoice",
+    description:
+      "Generate a professional invoice from logged time entries",
+    schema: z.object({
+      client_name: z.string().describe("Client name for the invoice"),
+      client_email: z.string().email().optional().describe("Client email"),
+      notes: z.string().optional().describe("Additional notes"),
+      discount: z.number().min(0).max(100).default(0).describe("Discount percentage (0-100)"),
+    }),
+    widget: {
+      name: "invoice-preview",
+      invoking: "Generating invoice...",
+      invoked: "Invoice ready",
+    },
+  },
+  async ({ client_name, client_email, notes, discount }) => {
+    if (timeEntries.length === 0) {
+      return error("No time entries to generate an invoice from. Log some time first.");
+    }
+
+    const entriesSnapshot = [...timeEntries];
+    const subtotal = entriesSnapshot.reduce((sum, e) => sum + e.total, 0);
+    const discountAmount = subtotal * (discount / 100);
+    const total = subtotal - discountAmount;
+
+    const invoice: InvoiceRecord = {
+      id: String(++invoiceIdCounter),
+      clientName: client_name,
+      clientEmail: client_email,
+      notes,
+      discount,
+      entries: entriesSnapshot,
+      subtotal,
+      discountAmount,
+      total,
+      createdAt: new Date().toISOString(),
+      confirmed: false,
+    };
+    invoices.push(invoice);
+
+    return widget({
+      props: {
+        invoiceId: invoice.id,
+        clientName: invoice.clientName,
+        clientEmail: invoice.clientEmail,
+        notes: invoice.notes,
+        discount: invoice.discount,
+        entries: invoice.entries,
+        subtotal: invoice.subtotal,
+        discountAmount: invoice.discountAmount,
+        total: invoice.total,
+        createdAt: invoice.createdAt,
+        confirmed: invoice.confirmed,
+      },
+      output: text(
+        `Invoice #${invoice.id} generated for ${client_name}. ` +
+          `${entriesSnapshot.length} items, subtotal €${subtotal.toFixed(2)}, ` +
+          `discount ${discount}% (-€${discountAmount.toFixed(2)}), ` +
+          `total €${total.toFixed(2)}`
+      ),
+    });
+  }
+);
+
+server.tool(
+  {
+    name: "confirm-invoice",
+    description: "Confirm and finalize an invoice",
+    schema: z.object({
+      invoiceId: z.string().describe("ID of the invoice to confirm"),
+      clientName: z.string().describe("Final client name"),
+      clientEmail: z.string().optional().describe("Final client email"),
+      notes: z.string().optional().describe("Final notes"),
+      discount: z.number().min(0).max(100).optional().describe("Final discount percentage"),
+    }),
+    widget: {
+      name: "invoice-preview",
+      invoking: "Confirming invoice...",
+      invoked: "Invoice confirmed",
+    },
+    _meta: { "ui/visibility": ["app"] },
+  },
+  async ({ invoiceId, clientName, clientEmail, notes, discount }) => {
+    const invoice = invoices.find((inv) => inv.id === invoiceId);
+    if (!invoice) {
+      return error(`Invoice not found: ${invoiceId}`);
+    }
+
+    invoice.clientName = clientName;
+    invoice.clientEmail = clientEmail;
+    invoice.notes = notes;
+    invoice.discount = discount ?? invoice.discount;
+    invoice.discountAmount = invoice.subtotal * (invoice.discount / 100);
+    invoice.total = invoice.subtotal - invoice.discountAmount;
+    invoice.confirmed = true;
+
+    return widget({
+      props: {
+        invoiceId: invoice.id,
+        clientName: invoice.clientName,
+        clientEmail: invoice.clientEmail,
+        notes: invoice.notes,
+        discount: invoice.discount,
+        entries: invoice.entries,
+        subtotal: invoice.subtotal,
+        discountAmount: invoice.discountAmount,
+        total: invoice.total,
+        createdAt: invoice.createdAt,
+        confirmed: invoice.confirmed,
+      },
+      output: text(`Invoice #${invoice.id} confirmed for ${invoice.clientName}. Total: €${invoice.total.toFixed(2)}`),
+    });
+  }
+);
+
 // --- App-only tools (callable from widget, hidden from AI) ---
 
 server.tool(
